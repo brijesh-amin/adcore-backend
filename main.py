@@ -9,22 +9,21 @@ from fastapi.middleware.cors import CORSMiddleware
 import requests
 from io import StringIO
 import os
-from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 # Load environment variables from .env file
-load_dotenv()
 
 # Read MongoDB configuration from environment variables
-MONGO_HOST = os.getenv('MONGO_HOST', 'localhost')
-MONGO_PORT = int(os.getenv('MONGO_PORT', '27017'))
+MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb://localhost:27017')
 EXPIRATION_SECONDS = int(os.getenv('EXPIRATION_SECONDS', 600))
-
+DATA_FETCH_API = os.getenv(
+    'DATA_FETCH_API', 'https://api.mockaroo.com/api/501b2790?count=100&key=8683a1c0')
 logging.basicConfig(level=logging.INFO)
 app = FastAPI()
 
 # CORS Middleware
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Allows all origins
@@ -34,26 +33,25 @@ app.add_middleware(
 )
 
 # MongoDB setup
-client = MongoClient(f"mongodb://{MONGO_HOST}:{MONGO_PORT}")
+client = MongoClient(MONGODB_URI)
 db = client['courses_db']
 courses_collection = db['courses']
 countries_collection = db['countries']
 cities_collection = db['cities']
-
 # Data Model for Course
 
 
 class Course(BaseModel):
     _id: str
-    University: str
-    City: str
-    Country: str
-    CourseName: str
-    CourseDescription: str
-    StartDate: datetime
-    EndDate: datetime
-    Price: float
-    Currency: str
+    university: str
+    city: str
+    country: str
+    coursename: str
+    coursedescription: str
+    startdate: datetime
+    enddate: datetime
+    price: float
+    currency: str
 
 # Define TTL Index on 'timestamp' field
 
@@ -68,7 +66,7 @@ def create_ttl_index():
 
 
 def normalize_and_load_data():
-    url = "https://api.mockaroo.com/api/501b2790?count=100&key=8683a1c0"
+    url = DATA_FETCH_API
 
     # Download CSV file
     response = requests.get(url)
@@ -109,17 +107,13 @@ def normalize_and_load_data():
 # Load courses initially
 
 
-@app.on_event("startup")
-def startup_event():
-    if courses_collection.count_documents({}) == 0:
-        logging.info('Normalizing and loading.....')
-        normalize_and_load_data()
-    # Start the scheduler to refresh data every 10 minutes
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(normalize_and_load_data, IntervalTrigger(
-        minutes=(EXPIRATION_SECONDS / 60)))
-    scheduler.start()
-# Helper function to convert ObjectId to string
+if courses_collection.count_documents({}) == 0:
+    normalize_and_load_data()
+# Start the scheduler to refresh data every 10 minutes
+scheduler = BackgroundScheduler()
+scheduler.add_job(normalize_and_load_data, IntervalTrigger(
+    minutes=(EXPIRATION_SECONDS / 60)))
+scheduler.start()
 
 
 def convert_objectid_to_str(data):
@@ -151,15 +145,15 @@ def get_courses(page: int = 1, limit: int = 10, search: str = None):
     if search:
         query = {
             "$or": [
-                {"University": {"$regex": search, "$options": "i"}},
-                {"City": {"$regex": search, "$options": "i"}},
-                {"Country": {"$regex": search, "$options": "i"}},
-                {"CourSename": {"$regex": search, "$options": "i"}},
-                {"CourseDescription": {"$regex": search, "$options": "i"}},
-                {"StartDate": {"$regex": search, "$options": "i"}},
-                {"EndDate": {"$regex": search, "$options": "i"}},
-                {"Price": {"$regex": search, "$options": "i"}},
-                {"Uurrency": {"$regex": search, "$options": "i"}},
+                {"university": {"$regex": search, "$options": "i"}},
+                {"city": {"$regex": search, "$options": "i"}},
+                {"country": {"$regex": search, "$options": "i"}},
+                {"coursename": {"$regex": search, "$options": "i"}},
+                {"coursedescription": {"$regex": search, "$options": "i"}},
+                {"startdate": {"$regex": search, "$options": "i"}},
+                {"enddate": {"$regex": search, "$options": "i"}},
+                {"price": {"$regex": search, "$options": "i"}},
+                {"currency": {"$regex": search, "$options": "i"}},
             ]
         }
     skip = (page - 1) * limit
@@ -206,24 +200,24 @@ def update_course(course_id: str, course: Course):
         raise HTTPException(status_code=404, detail="Course not found")
 
     # Validate that restricted fields are not being updated
-    if (course.CourseName != existing_course["CourseName"] or
-            course.University != existing_course["University"] or
-            course.City != existing_course["City"] or
-            course.Country != existing_course["Country"]):
+    if (course.coursename != existing_course["coursename"] or
+            course.university != existing_course["university"] or
+            course.city != existing_course["city"] or
+            course.country != existing_course["country"]):
         raise HTTPException(
             status_code=400,
-            detail="Updates to Course Name, University, City, or Country are not allowed"
+            detail="Updates to Course Name, university, city, or country are not allowed"
         )
 
     # Perform the update (excluding the restricted fields)
     result = courses_collection.update_one(
         {"_id": obj_id},
         {"$set": {
-            "CourseDescription": course.CourseDescription,
-            "StartDate": course.StartDate,
-            "EndDate": course.EndDate,
-            "Price": course.Price,
-            "Currency": course.Currency
+            "coursedescription": course.coursedescription,
+            "startdate": course.startdate,
+            "enddate": course.enddate,
+            "price": course.price,
+            "currency": course.currency
         }}
     )
 
@@ -248,7 +242,7 @@ def delete_course(course_id: str):
 
 @ app.get("/universities/")
 def get_universities():
-    universities = courses_collection.distinct("University")
+    universities = courses_collection.distinct("university")
     return {"universities": universities}
 
 
@@ -260,4 +254,15 @@ def get_cities():
 
 @ app.get("/countries/")
 def get_countries():
-    countries = list
+    countries = list(countries_collection.find({}, {"_id": 0, "country": 1}))
+    return {"countries": [country["country"] for country in countries]}
+
+
+@app.get("/")
+def read_root():
+    return {"Hello": "World"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000)
